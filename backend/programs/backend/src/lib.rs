@@ -1,13 +1,15 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::entrypoint::ProgramResult;
+use anchor_lang::solana_program::{
+    entrypoint::ProgramResult,
+    program_error::ProgramError
+};
 
-declare_id!("5sf3oNJKEARM9ia6yew3xGVcct8244xHxLEPQ4F2cFQb");
+declare_id!("APSRuc2SBwPNwfLE9wqHCowvZnjQnt2CMF8jvGw5hzwi");
 
 #[program]
 pub mod backend {
     use super::*;
 
-    #[cfg(not(feature = "program"))]
     pub fn create_account(ctx: Context<CreateAccount>) -> ProgramResult {
         let my_account = &mut ctx.accounts.my_account;
         my_account.owner = ctx.accounts.owner.key();
@@ -16,9 +18,6 @@ pub mod backend {
         my_account.amount_lended = 0;
         Ok(())
     }
-
-
-
 
     pub fn lend(ctx: Context<Lend>, amount: u64) -> ProgramResult {
         let txn = anchor_lang::solana_program::system_instruction::transfer(
@@ -31,7 +30,7 @@ pub mod backend {
         let pool = &mut ctx.accounts.pool;
 
         pool.balance += amount;
-
+        pool.liquidity += amount;
 
         let lender_account = &mut ctx.accounts.lender_account;
         lender_account.lender = ctx.accounts.lender.key();
@@ -39,17 +38,21 @@ pub mod backend {
         Ok(())
     }
 
-
     pub fn borrow(ctx: Context<Borrow>, amount: u64) -> ProgramResult {
+        if ctx.accounts.pool.liquidity < amount {
+            return Err(ProgramError::InsufficientFunds);
+        }
+
         let txn = anchor_lang::solana_program::system_instruction::transfer(
             &ctx.accounts.pool.key(), 
             &ctx.accounts.borrower.key(), 
             amount);
         anchor_lang::solana_program::program::invoke(&txn, &[ctx.accounts.pool.to_account_info(), ctx.accounts.borrower.to_account_info()])?;
+        
         let pool = &mut ctx.accounts.pool;
-
         pool.balance -= amount;
         pool.borrowed += amount;
+        pool.liquidity -= amount;
 
         let borrower_account = &mut ctx.accounts.borrower_account;
         borrower_account.borrower = ctx.accounts.borrower.key();
@@ -57,26 +60,44 @@ pub mod backend {
         Ok(())
     }
 
-
     pub fn repay(ctx: Context<Repay>, amount: u64) -> ProgramResult {
-        let txn = anchor_lang::solana_program::system_instruction::transfer(&ctx.accounts.repayer.key(), &ctx.accounts.pool.key(), amount);
-        anchor_lang::solana_program::program::invoke(&txn, &[ctx.accounts.repayer.to_account_info(), ctx.accounts.pool.to_account_info()])?;
-        let pool = &mut ctx.accounts.pool;
+        if ctx.accounts.borrower_account.amount_borrowed < amount {
+            return Err(ProgramError::InsufficientFunds);
+        }
 
+        let txn = anchor_lang::solana_program::system_instruction::transfer(
+            &ctx.accounts.repayer.key(), 
+            &ctx.accounts.pool.key(), 
+            amount
+        );
+        anchor_lang::solana_program::program::invoke(&txn, &[ctx.accounts.repayer.to_account_info(), ctx.accounts.pool.to_account_info()])?;
+        
+        let pool = &mut ctx.accounts.pool;
         pool.balance += amount;
         pool.borrowed -= amount;
+        pool.liquidity += amount;
 
         let borrower_account = &mut ctx.accounts.borrower_account;
         borrower_account.amount_borrowed -= amount;
         Ok(())
     }
 
-
     pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> ProgramResult {
-        let txn = anchor_lang::solana_program::system_instruction::transfer(&ctx.accounts.pool.key(), &ctx.accounts.withdrawer.key(), amount);
-        anchor_lang::solana_program::program::invoke(&txn, &[ctx.accounts.pool.to_account_info(), ctx.accounts.withdrawer.to_account_info()])?;
-        let pool = &mut ctx.accounts.pool;
+        if ctx.accounts.lender_account.amount_lended < amount {
+            return Err(ProgramError::InsufficientFunds);
+        }
+        if ctx.accounts.pool.liquidity < amount {
+            return Err(ProgramError::InsufficientFunds);
+        }
 
+        let txn = anchor_lang::solana_program::system_instruction::transfer(
+            &ctx.accounts.pool.key(), 
+            &ctx.accounts.withdrawer.key(), 
+            amount
+        );
+        anchor_lang::solana_program::program::invoke(&txn, &[ctx.accounts.pool.to_account_info(), ctx.accounts.withdrawer.to_account_info()])?;
+        
+        let pool = &mut ctx.accounts.pool;
         pool.balance -= amount;
         pool.liquidity -= amount;
 
@@ -87,6 +108,7 @@ pub mod backend {
 }
 
 #[derive(Accounts)]
+#[derive(Debug)]
 pub struct CreateAccount<'info> {
     #[account(init, payer=owner, space=5000, seeds=[b"myaccount", owner.key().as_ref()], bump)]
     pub my_account: Account<'info, MyAccount>,
@@ -95,8 +117,8 @@ pub struct CreateAccount<'info> {
     pub system_program: Program<'info, System>,
 }
 
-
 #[derive(Accounts)]
+#[derive(Debug)]
 pub struct Lend<'info> {
     #[account(mut)]
     pub pool: Account<'info, Pool>,
@@ -108,6 +130,7 @@ pub struct Lend<'info> {
 }
 
 #[derive(Accounts)]
+#[derive(Debug)]
 pub struct Borrow<'info> {
     #[account(mut)]
     pub pool: Account<'info, Pool>,
@@ -119,6 +142,7 @@ pub struct Borrow<'info> {
 }
 
 #[derive(Accounts)]
+#[derive(Debug)]
 pub struct Repay<'info> {
     #[account(mut)]
     pub pool: Account<'info, Pool>,
@@ -130,6 +154,7 @@ pub struct Repay<'info> {
 }
 
 #[derive(Accounts)]
+#[derive(Debug)]
 pub struct Withdraw<'info> {
     #[account(mut)]
     pub pool: Account<'info, Pool>,
@@ -141,28 +166,32 @@ pub struct Withdraw<'info> {
 }
 
 #[account]
+#[derive(Debug)]
 pub struct Pool {
     pub name: String,
     pub balance: u64,
     pub owner: Pubkey,
-    pub utilization: u8, // Changed from enum to u8 to implement BorshSerialize/Deserialize
+    pub utilization: u8,
     pub liquidity: u64,
     pub borrowed: u64,
 }
 
 #[account]
+#[derive(Debug)]
 pub struct LenderAccount {
    pub lender: Pubkey,
    pub amount_lended: u64,
 }
 
 #[account]
+#[derive(Debug)]
 pub struct BorrowerAccount {
    pub borrower: Pubkey,
    pub amount_borrowed: u64,
 }
 
 #[account]
+#[derive(Debug)]
 pub struct MyAccount {
     pub owner: Pubkey,
     pub amount_borrowed: u64,
@@ -170,18 +199,24 @@ pub struct MyAccount {
     pub amount_lended: u64,
 }
 
-// Moved enum to a constant representation
 pub const POOL_UTILIZATION_HIGH: u8 = 0;
 pub const POOL_UTILIZATION_MEDIUM: u8 = 1;
 pub const POOL_UTILIZATION_LOW: u8 = 2;
 
-
+#[error_code]
+pub enum LendingError {
+    #[msg("Insufficient liquidity in pool")]
+    InsufficientLiquidity,
+    #[msg("Invalid repay amount")]
+    InvalidRepayAmount,
+    #[msg("Insufficient lender balance")]
+    InsufficientLenderBalance,
+}
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
-    use solana_program::clock::Epoch;
-    use std::mem;
+    use anchor_lang::solana_program::clock::Epoch;
 
     #[test]
     fn test_create_account() {
@@ -231,13 +266,14 @@ mod tests {
             Epoch::default(),
         );
 
-        let accounts = CreateAccount {
+        let mut accounts = CreateAccount {
             my_account: Account::try_from(&my_account).unwrap(),
             owner: Signer::try_from(&owner_account).unwrap(),
             system_program: Program::try_from(&system_program).unwrap(),
         };
 
-        let ctx = Context::new(program_id, accounts, &[]);
+        let mut bumps = CreateAccountBumps::default();
+        let ctx = Context::new(&program_id, &mut accounts, &[], bumps);
         let result = super::backend::create_account(ctx);
         assert!(result.is_ok());
     }
@@ -305,14 +341,15 @@ mod tests {
             Epoch::default(),
         );
 
-        let accounts = Lend {
+        let mut accounts = Lend {
             pool: Account::try_from(&pool_account).unwrap(),
             lender_account: Account::try_from(&lender_tracking_account).unwrap(),
             lender: Signer::try_from(&lender_account_info).unwrap(),
             system_program: Program::try_from(&system_program).unwrap(),
         };
 
-        let ctx = Context::new(program_id, accounts, &[]);
+        let mut bumps = LendBumps::default();
+        let ctx = Context::new(&program_id,  &mut accounts, &[], bumps);
         let result = super::backend::lend(ctx, 100);
         assert!(result.is_ok());
     }
@@ -380,14 +417,15 @@ mod tests {
             Epoch::default(),
         );
 
-        let accounts = Borrow {
+        let mut accounts = Borrow {
             pool: Account::try_from(&pool_account).unwrap(),
             borrower_account: Account::try_from(&borrower_tracking_account).unwrap(),
             borrower: Signer::try_from(&borrower_account_info).unwrap(),
             system_program: Program::try_from(&system_program).unwrap(),
         };
 
-        let ctx = Context::new(program_id, accounts, &[]);
+        let mut bumps = BorrowBumps::default();
+        let ctx = Context::new(&program_id, &mut accounts, &[], bumps);
         let result = super::backend::borrow(ctx, 1000);
         assert!(result.is_ok());
     }
@@ -455,14 +493,15 @@ mod tests {
             Epoch::default(),
         );
 
-        let accounts = Repay {
+        let mut accounts = Repay {
             pool: Account::try_from(&pool_account).unwrap(),
             borrower_account: Account::try_from(&borrower_tracking_account).unwrap(),
             repayer: Signer::try_from(&repayer_account).unwrap(),
             system_program: Program::try_from(&system_program).unwrap(),
         };
 
-        let ctx = Context::new(program_id, accounts, &[]);
+        let mut bumps = RepayBumps::default();
+        let ctx = Context::new(&program_id, &mut accounts, &[], bumps);
         let result = super::backend::repay(ctx, 500);
         assert!(result.is_ok());
     }
@@ -530,14 +569,15 @@ mod tests {
             Epoch::default(),
         );
 
-        let accounts = Withdraw {
+        let mut accounts = Withdraw {
             pool: Account::try_from(&pool_account).unwrap(),
             lender_account: Account::try_from(&lender_tracking_account).unwrap(),
             withdrawer: Signer::try_from(&withdrawer_account).unwrap(),
             system_program: Program::try_from(&system_program).unwrap(),
         };
 
-        let ctx = Context::new(program_id, accounts, &[]);
+        let mut bumps = WithdrawBumps::default();
+        let ctx = Context::new(&program_id, &mut accounts, &[], bumps);
         let result = super::backend::withdraw(ctx, 1000);
         assert!(result.is_ok());
     }
