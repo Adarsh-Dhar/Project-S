@@ -1,6 +1,8 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::entrypoint::ProgramResult;
 
+declare_id!("5sf3oNJKEARM9ia6yew3xGVcct8244xHxLEPQ4F2cFQb");
+
 #[program]
 pub mod backend {
     use super::*;
@@ -17,14 +19,19 @@ pub mod backend {
 
 
 
-    #[cfg(not(feature = "program"))]
+
     pub fn lend(ctx: Context<Lend>, amount: u64) -> ProgramResult {
-        let txn = anchor_lang::solana_program::system_instruction::transfer(ctx.accounts.lender.key(), ctx.accounts.pool.key(), amount);
-        anchor_lang::solana_program::invoke(txn, &[ctx.accounts.lender.to_account_info(), ctx.accounts.pool.to_account_info()])?;
+        let txn = anchor_lang::solana_program::system_instruction::transfer(
+            &ctx.accounts.lender.key(), 
+            &ctx.accounts.pool.key(), 
+            amount
+        );
+
+        anchor_lang::solana_program::program::invoke(&txn, &[ctx.accounts.lender.to_account_info(), ctx.accounts.pool.to_account_info()])?;
         let pool = &mut ctx.accounts.pool;
 
-        pool.amount += amount;
-        pool.lender = ctx.accounts.lender.key();
+        pool.balance += amount;
+
 
         let lender_account = &mut ctx.accounts.lender_account;
         lender_account.lender = ctx.accounts.lender.key();
@@ -32,10 +39,13 @@ pub mod backend {
         Ok(())
     }
 
-    #[cfg(not(feature = "program"))]
+
     pub fn borrow(ctx: Context<Borrow>, amount: u64) -> ProgramResult {
-        let txn = anchor_lang::solana_program::system_instruction::transfer(ctx.accounts.pool.key(), ctx.accounts.borrower.key(), amount);
-        anchor_lang::solana_program::invoke(txn, &[ctx.accounts.pool.to_account_info(), ctx.accounts.borrower.to_account_info()])?;
+        let txn = anchor_lang::solana_program::system_instruction::transfer(
+            &ctx.accounts.pool.key(), 
+            &ctx.accounts.borrower.key(), 
+            amount);
+        anchor_lang::solana_program::program::invoke(&txn, &[ctx.accounts.pool.to_account_info(), ctx.accounts.borrower.to_account_info()])?;
         let pool = &mut ctx.accounts.pool;
 
         pool.balance -= amount;
@@ -47,10 +57,10 @@ pub mod backend {
         Ok(())
     }
 
-    #[cfg(not(feature = "program"))]
+
     pub fn repay(ctx: Context<Repay>, amount: u64) -> ProgramResult {
-        let txn = anchor_lang::solana_program::system_instruction::transfer(ctx.accounts.repayer.key(), ctx.accounts.pool.key(), amount);
-        anchor_lang::solana_program::invoke(txn, &[ctx.accounts.repayer.to_account_info(), ctx.accounts.pool.to_account_info()])?;
+        let txn = anchor_lang::solana_program::system_instruction::transfer(&ctx.accounts.repayer.key(), &ctx.accounts.pool.key(), amount);
+        anchor_lang::solana_program::program::invoke(&txn, &[ctx.accounts.repayer.to_account_info(), ctx.accounts.pool.to_account_info()])?;
         let pool = &mut ctx.accounts.pool;
 
         pool.balance += amount;
@@ -61,10 +71,10 @@ pub mod backend {
         Ok(())
     }
 
-    #[cfg(not(feature = "program"))]
+
     pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> ProgramResult {
-        let txn = anchor_lang::solana_program::system_instruction::transfer(ctx.accounts.pool.key(), ctx.accounts.withdrawer.key(), amount);
-        anchor_lang::solana_program::invoke(txn, &[ctx.accounts.pool.to_account_info(), ctx.accounts.withdrawer.to_account_info()])?;
+        let txn = anchor_lang::solana_program::system_instruction::transfer(&ctx.accounts.pool.key(), &ctx.accounts.withdrawer.key(), amount);
+        anchor_lang::solana_program::program::invoke(&txn, &[ctx.accounts.pool.to_account_info(), ctx.accounts.withdrawer.to_account_info()])?;
         let pool = &mut ctx.accounts.pool;
 
         pool.balance -= amount;
@@ -78,7 +88,7 @@ pub mod backend {
 
 #[derive(Accounts)]
 pub struct CreateAccount<'info> {
-    #[account(init, payer=user, space=5000, seeds=[b"bankaccount", user.key().as_ref()], bump)]
+    #[account(init, payer=owner, space=5000, seeds=[b"myaccount", owner.key().as_ref()], bump)]
     pub my_account: Account<'info, MyAccount>,
     #[account(mut)]
     pub owner: Signer<'info>,
@@ -88,9 +98,9 @@ pub struct CreateAccount<'info> {
 
 #[derive(Accounts)]
 pub struct Lend<'info> {
-    #[account(init, payer=user, space=5000, seeds=[b"poolaccount", user.key().as_ref()], bump)]
+    #[account(mut)]
     pub pool: Account<'info, Pool>,
-    #[account(init, payer=user, space=5000, seeds=[b"lenderaccount", user.key().as_ref()], bump)]
+    #[account(init, payer=lender, space=5000, seeds=[b"lenderaccount", lender.key().as_ref()], bump)]
     pub lender_account: Account<'info, LenderAccount>,
     #[account(mut)]
     pub lender: Signer<'info>,
@@ -135,7 +145,7 @@ pub struct Pool {
     pub name: String,
     pub balance: u64,
     pub owner: Pubkey,
-    pub utilization: PoolUtilization,
+    pub utilization: u8, // Changed from enum to u8 to implement BorshSerialize/Deserialize
     pub liquidity: u64,
     pub borrowed: u64,
 }
@@ -158,11 +168,9 @@ pub struct MyAccount {
     pub amount_borrowed: u64,
     pub collateral_deposited: u64,
     pub amount_lended: u64,
-
 }
 
-pub enum PoolUtilization {
-    High,
-    Medium,
-    Low,
-}
+// Moved enum to a constant representation
+pub const POOL_UTILIZATION_HIGH: u8 = 0;
+pub const POOL_UTILIZATION_MEDIUM: u8 = 1;
+pub const POOL_UTILIZATION_LOW: u8 = 2;
